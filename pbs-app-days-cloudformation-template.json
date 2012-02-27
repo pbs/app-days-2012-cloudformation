@@ -1,0 +1,113 @@
+{
+    "Description"   :   "PBS App Days 2012 CloudFormation Template for AuthZ",
+    
+
+    "Parameters" : {
+        "KeyName" : {
+            "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instance",
+            "Type" : "String",
+            "Default": "pbs-app-days-cf"
+            },
+        "AvailabilityZone" : {
+            "Description" : "Name of the availability zone to create this stack",
+            "Type" : "String",
+            "Default": "us-east-1a"
+        },
+        "InstancesType" : {
+            "Description" : "Type of EC2 instances to launch",
+            "Type" : "String",
+            "Default" : "m1.small"
+        },
+        "OPSEmail": {
+            "Description"   :   "Email address to notify if there are any operations events",
+            "Type"  :   "String",
+            "Default"   :   "lcraciun@pbs.org"
+        },
+        "SourcepackagesS3Bucket"    :   {
+            "Description"   :   "Bucket with the sources and config",
+            "Type"  :   "String",
+            "Default"   :   "pbs.app-days-cf.sourcepackages"
+        }
+    },
+    
+
+   "Mappings" : {
+        "AWSInstanceType2Arch" : {
+            "t1.micro"    : { "Arch" : "64" },
+            "m1.small"    : { "Arch" : "32" },
+            "m1.large"    : { "Arch" : "64" },
+            "m1.xlarge"   : { "Arch" : "64" },
+            "m2.xlarge"   : { "Arch" : "64" },
+            "m2.2xlarge"  : { "Arch" : "64" },
+            "m2.4xlarge"  : { "Arch" : "64" },
+            "c1.medium"   : { "Arch" : "32" },
+            "c1.xlarge"   : { "Arch" : "64" },
+            "cc1.4xlarge" : { "Arch" : "64" }
+        },
+        "AWSRegionArch2AMI" : {
+            "us-east-1"      : { "32" : "ami-aba768c2", "64" : "ami-81a768e8" },
+            "us-west-1"      : { "32" : "ami-458fd300", "64" : "ami-b18ed2f4" },
+            "us-west-2"      : { "32" : "ami-fcff72cc", "64" : "ami-feff72ce" },
+            "eu-west-1"      : { "32" : "ami-018bb975", "64" : "ami-998bb9ed" },
+            "sa-east-1"      : { "32" : "ami-a039e6bd", "64" : "ami-a239e6bf" },
+            "ap-southeast-1" : { "32" : "ami-425a2010", "64" : "ami-5e5a200c" },
+            "ap-northeast-1" : { "32" : "ami-7871c579", "64" : "ami-7671c577" }
+    }
+  }, 
+
+
+    "Resources" :   {
+          
+        "AppDaysCfmUser"   : {
+            "Type"  :   "AWS::IAM::User",
+            "Properties"    :   {
+                "Path"  :   "/",
+                "Polices"   :   [   {
+                    "PolicyName"    :   "root",
+                    "PolicyDocument"    :   {   
+                        "Statement" :   [   
+                            {
+                                "Efect" :   "Allow",
+                                "Action"    :   "cloudformation:DescribeStackResource",
+                                "Resource"  :   "*"
+                            },
+                            {
+                                "Efect" :   "Allow",
+                                "Action"    :  [ 
+                                    "s3:GetObject",
+                                    "s3:ListBucket",
+                                    "s3:ListAllMyBuckets"
+                                ],
+                                "Resource" :    [
+                                    { "Fn::Join" : ["", ["arn:aws:s3:::", {"Ref" : "SourcepackagesS3Bucket"} , "/*"]]},
+                                    { "Fn::Join" : ["", ["arn:aws:s3:::", {"Ref" : "SourcepackagesS3Bucket"}]]}
+                                ]
+                            }
+                        ]   
+                    }
+                }   ]
+            }
+        },
+
+        "IAMKeys"   :   {
+            "Type"  :   "AWS::IAM::AccessKey",
+            "Properties"    :   {
+                "UserName"  :   {   "Ref"   :   "AppDaysCfmUser" }
+            }
+        },
+
+            
+        "NotificationTopic": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "Subscription": [ {
+                "Endpoint": { "Ref": "OPSEmail" },
+                "Protocol": "email" } ]
+            }     
+        }
+
+        
+        
+    }
+            
+} 
