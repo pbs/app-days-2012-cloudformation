@@ -27,6 +27,11 @@
             "Description"   :   "Bucket with the sources and config",
             "Type"  :   "String",
             "Default"   :   "pbs.app-days-cf.sourcepackages"
+        },
+        "AppVersion": {
+            "Description" : "The version package to deploy to the app servers",
+            "Type" : "String",
+            "Default" : "authz-0.1.2.tar.gz"
         }
     },
     
@@ -45,7 +50,7 @@
             "cc1.4xlarge" : { "Arch" : "64" }
         },
         "AWSRegionArch2AMI" : {
-            "us-east-1"      : { "32" : "ami-aba768c2", "64" : "ami-81a768e8" },
+            "us-east-1a"      : { "32" : "ami-aba768c2", "64" : "ami-81a768e8" },
             "us-west-1"      : { "32" : "ami-458fd300", "64" : "ami-b18ed2f4" },
             "us-west-2"      : { "32" : "ami-fcff72cc", "64" : "ami-feff72ce" },
             "eu-west-1"      : { "32" : "ami-018bb975", "64" : "ami-998bb9ed" },
@@ -57,22 +62,23 @@
 
 
     "Resources" :   {
+
           
         "AppDaysCfmUser"   : {
             "Type"  :   "AWS::IAM::User",
             "Properties"    :   {
                 "Path"  :   "/",
-                "Polices"   :   [   {
+                "Policies"   :   [   {
                     "PolicyName"    :   "root",
                     "PolicyDocument"    :   {   
                         "Statement" :   [   
                             {
-                                "Efect" :   "Allow",
+                                "Effect" :   "Allow",
                                 "Action"    :   "cloudformation:DescribeStackResource",
                                 "Resource"  :   "*"
                             },
                             {
-                                "Efect" :   "Allow",
+                                "Effect" :   "Allow",
                                 "Action"    :  [ 
                                     "s3:GetObject",
                                     "s3:ListBucket",
@@ -89,6 +95,7 @@
             }
         },
 
+
         "IAMKeys"   :   {
             "Type"  :   "AWS::IAM::AccessKey",
             "Properties"    :   {
@@ -104,10 +111,210 @@
                 "Endpoint": { "Ref": "OPSEmail" },
                 "Protocol": "email" } ]
             }     
-        }
+        },
+
+
+        "ElasticLoadBalancer" : {
+            "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
+            "Properties" : {
+                "AvailabilityZones" : [ { "Ref" : "AvailabilityZone" } ] ,
+                "Listeners" : [ {
+                    "LoadBalancerPort" : "80",
+                    "InstancePort" : "80",
+                    "Protocol" : "HTTP"
+                } ],
+                "HealthCheck" : {
+                    "Target" : "TCP:80",
+                    "HealthyThreshold" : "3",
+                    "UnhealthyThreshold" : "5",
+                    "Interval" : "10",
+                    "Timeout" : "5"
+                }
+            }
+        },        
+
+
+        "InstanceSecurityGroup" : {
+            "Type" : "AWS::EC2::SecurityGroup",
+            "Properties" : {
+                "GroupDescription" : "Enable SSH access and HTTP from the load balancer only",
+                "SecurityGroupIngress" : [ {
+                    "IpProtocol" : "tcp",
+                    "FromPort" : "22",
+                    "ToPort" : "22",
+                    "CidrIp" : "0.0.0.0/0"
+                    },
+                    {
+                    "IpProtocol" : "tcp",
+                    "FromPort" : "80",
+                    "ToPort" : "80",
+                    "SourceSecurityGroupOwnerId" : {"Fn::GetAtt" : ["ElasticLoadBalancer", "SourceSecurityGroup.OwnerAlias"]},
+                    "SourceSecurityGroupName" : {"Fn::GetAtt" : ["ElasticLoadBalancer", "SourceSecurityGroup.GroupName"]}
+                    }
+                ]
+            }
+        },
+
+
+        "AppServerGroup" : {
+            "Type" : "AWS::AutoScaling::AutoScalingGroup",
+             "Properties" : {
+                "AvailabilityZones" : [ { "Ref" : "AvailabilityZone"} ],
+                "LaunchConfigurationName" : { "Ref" : "AppLaunchConfig" },
+                "MinSize" : "2",
+                "MaxSize" : "8",
+                "LoadBalancerNames" : [ { "Ref" : "ElasticLoadBalancer" } ],
+                "NotificationConfiguration" : {
+                    "TopicARN" : { "Ref" : "NotificationTopic" },
+                    "NotificationTypes" : [ "autoscaling:EC2_INSTANCE_LAUNCH","autoscaling:EC2_INSTANCE_LAUNCH_ERROR","autoscaling:EC2_INSTANCE_TERMINATE", "autoscaling:EC2_INSTANCE_TERMINATE_ERROR"]
+                }
+            }
+        },
+
+
+        "AppLaunchConfig" : {
+            "Type" : "AWS::AutoScaling::LaunchConfiguration",
+            "Metadata"  :   {
+                "DeployAppVersion" : { "Ref" : "AppVersion" },
+                "AWS::CloudFormation::Init" :   {
+                    "config"    :   {
+                        "packages"  :   {
+                            "yum"   :   {
+                                "httpd" :   [],
+                                "python-setuptools" :   [],
+                                "python-devel"  :   [],
+                                "mod_wsgi"  :   []
+                            },
+                            "python"    :   {
+                                "pip"   :   [],
+                                "virtualenv"    :   [],
+                                "boto"  :   []
+                            }
+                        },
+                        "sources"   :   {
+                            "/home/ec2-user/app" : "http://github.com/pbs/app-days-2012-authzlib/tarball/master"
+                        },
+                        "files" : {
+                            "/etc/httpd/conf.d/authz.conf" : {
+                                "source"   :    "http://s3.amazonaws.com/pbs.app-days-cf.sourcepackages/apache.conf"
+                            }
+                        },
+                        "services"  :   {
+                            "sysvinit"  :   {
+                                "httpd" :   {
+                                    "enabled"   :   "true",
+                                    "ensureRunning" :   "true"
+                                }
+                            }
+                        }
+                    }
+                }
+            },   
+
+            "Properties" : {
+                "KeyName" : { "Ref" : "KeyName" },
+                "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AvailabilityZone" }, { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstancesType" }, "Arch"] } ] },
+                "UserData" : {  "Fn::Base64"    :   {   "Fn::Join"   :   ["",    [
+                    "#!/bin/bash -x\n",
+                    "/opt/aws/bin/cfn-init -s ", { "Ref" :   "AWS::StackName"}, " -r AppLaunchConfig",
+                    "           --access-key ", { "Ref"  :   "IAMKeys" },
+                    "           --secret-key ", { "Fn::GetAtt"   :   ["IAMKeys","SecretAccessKey"]},
+                    "           --region ", { "Ref"  :   "AWS::Region" }, "\n",
+                    "/opt/aws/bin/cfn-signal -e $? '", { "Ref"  :   "WaitHandle" }, "'\n"
+                ]]}},
+                "SecurityGroups" : [ { "Ref" : "InstanceSecurityGroup" } ],
+                "InstanceType" : { "Ref" : "InstancesType" }
+            }
+        },
+
+    
+        "WaitHandle"    :   {
+            "Type"  :   "AWS::CloudFormation::WaitConditionHandle"
+        },
+
+
+        "WaitCondition" :   {
+            "Type"  :   "AWS::CloudFormation::WaitCondition",
+            "DependsOn" :   "AppServerGroup",
+            "Properties"    :  {
+                "Handle"    :   { "Ref" :   "WaitHandle"},
+                "Timeout"   :   "600"
+            }
+        },
 
         
+        "AppServerScaleUpPolicy" : {
+           "Type" : "AWS::AutoScaling::ScalingPolicy",
+            "Properties" : {
+                "AdjustmentType" : "ChangeInCapacity",
+                "AutoScalingGroupName" : { "Ref" : "AppServerGroup" },
+                "Cooldown" : "15",
+                "ScalingAdjustment" : "2"
+            }
+        },
+
+
+        "AppServerScaleDownPolicy" : {
+            "Type" : "AWS::AutoScaling::ScalingPolicy",
+            "Properties" : {
+                "AdjustmentType" : "ChangeInCapacity",
+                "AutoScalingGroupName" : { "Ref" : "AppServerGroup" },
+                "Cooldown" : "15",
+                "ScalingAdjustment" : "-1"
+            }
+        },
+
+
+        "CPUAlarmHigh": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Scale-up if CPU > 90% for 10 minutes",
+                "MetricName": "CPUUtilization",
+                "Namespace": "AWS/EC2",
+                "Statistic": "Average",
+                "Period": "300",
+                "EvaluationPeriods": "2",
+                "Threshold": "90",
+                "AlarmActions": [ { "Ref": "AppServerScaleUpPolicy" } ],
+                    "Dimensions": [
+                    {     
+                        "Name": "AutoScalingGroupName",
+                        "Value": { "Ref": "AppServerGroup" }
+                    }
+                    ],
+                "ComparisonOperator": "GreaterThanThreshold"
+            }
+        },
+
+
+        "CPUAlarmLow": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Scale-down if CPU < 70% for 10 minutes",
+                "MetricName": "CPUUtilization",
+                "Namespace": "AWS/EC2",
+                "Statistic": "Average",
+                "Period": "300",
+                "EvaluationPeriods": "2",
+                "Threshold": "70",
+                "AlarmActions": [ { "Ref": "AppServerScaleDownPolicy" } ],
+                "Dimensions": [
+                    {     
+                    "Name": "AutoScalingGroupName",
+                    "Value": { "Ref": "AppServerGroup" }
+                    }
+                ],
+            "ComparisonOperator": "LessThanThreshold"
+            }
+        }
         
+    },
+
+    "Outputs" : {
+        "URL" : {
+            "Description" : "URL of the ELB",
+            "Value" :  { "Fn::Join" : [ "", [ "http://", { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ]}]]}
+        }
     }
             
 } 
